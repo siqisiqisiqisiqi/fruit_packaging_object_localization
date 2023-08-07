@@ -1,0 +1,15 @@
+<launch>
+    <arg name="raw_camera_info" default="$(find camera_backward_projection)/params/A.npz" />
+    <arg name="rectified_camera_info" default="$(find camera_backward_projection)/params/C.npz" />
+    <arg name="image_fp" default="$(find camera_backward_projection)/image/image_1.jpg" />
+    <arg name="param_fp" default="$(find camera_backward_projection)/params" />
+
+    <include file="$(find zed_wrapper)/launch/zed2icopy.launch"/>
+
+    <node name="camera_calib" pkg="camera_backward_projection" type="camera_calib.py" output="screen">
+        <param name="~image_fp" value="$(arg image_fp)"/>
+        <param name="~param_fp" value="$(arg param_fp)"/>
+        <param name="~raw_camera_info" value="$(arg raw_camera_info)"/>
+        <param name="~rectified_camera_info" value="$(arg rectified_camera_info)"/>
+    </node>
+</launch>
