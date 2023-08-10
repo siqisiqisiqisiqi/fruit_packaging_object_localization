@@ -9,6 +9,8 @@ from cv_bridge import CvBridge, CvBridgeError
 from sensor_msgs.msg import Image, CameraInfo
 
 
+chess_size = 22.86
+
 class CameraCalib:
     def __init__(self):
         rospy.init_node("camera_calib", anonymous=True)
@@ -18,14 +20,16 @@ class CameraCalib:
         # Init subscribers 
         rospy.Subscriber("zed2i/zed_node/rgb/image_rect_color",
                                          Image, self.get_image)
-        # rospy.Subscriber("zed2i/zed_node/rgb/camera_info")
+        # Init subscribers 
+        rospy.Subscriber("zed2i/zed_node/depth/depth_registered",
+                                         Image, self.get_depth_image)
         camera_info = rospy.wait_for_message("zed2i/zed_node/rgb/camera_info", CameraInfo)
         rospy.sleep(1)
         self.mtx = np.array(camera_info.K).reshape(3,3)
         self.dist = np.array([[0, 0, 0, 0, 0]]).astype("float64")
 
-        param_fp = rospy.get_param("~param_fp")
-        np.savez(param_fp+'/B.npz', mtx=self.mtx, dist=self.dist)
+        self.param_fp = rospy.get_param("~param_fp")
+        np.savez(self.param_fp+'/B.npz', mtx=self.mtx, dist=self.dist)
 
         # Init the yolo model
         self.model = torch.hub.load("ultralytics/yolov5", "yolov5s")
@@ -38,6 +42,27 @@ class CameraCalib:
         # self.predefined_z = 0
         self.chess_size = 1
         
+    def get_depth_image(self, data):
+        try:
+            self.depth_image = self.bridge.imgmsg_to_cv2(data, "32FC1")
+
+        except CvBridgeError as e:
+            print(e)
+
+    def get_depth(self, point):
+        x = point[0]
+        y = point[1]
+        depth = 0
+        idex = 0
+        for i in range(-5,5):
+            for j in range(-5,5):
+                if np.isnan(self.depth_image[y+j,x+i]):
+                    continue
+                image_depth = self.depth_image[y+j,x+i][0]
+                depth = depth + image_depth
+                idex = idex + 1    
+        depth = depth/(idex+1e-3)
+        self.depth = depth*1000/chess_size
 
     def get_image(self, data):
         try:
@@ -80,6 +105,22 @@ class CameraCalib:
         result = inv(Mat2)@vec_o
         return result
     
+    def improved_projection(self, point, mtx, Mat, tvec):
+        point2 = inv(mtx)@point
+        M = np.eye(3)
+        M[:,[2]] = -1*point2
+        v1 = np.array([[0.0,0.0,-1*self.depth]]).T
+        # rospy.loginfo(f"M matrix shape is {M.shape}")
+        result1 = inv(M)@v1
+        # rospy.loginfo(f"the result1 value is {result1}, shape is {result1.shape}")
+        xc = result1[0,0]
+        yc = result1[1,0]
+        zc = self.depth
+        v2 = np.array([[xc],[yc],[zc]])
+        result = inv(Mat)@(v2-tvec)
+        # rospy.loginfo(f"final result is {result}")
+        return result
+    
     def extrinsic_calibration(self):
         img = self.cv_image
         criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
@@ -109,7 +150,8 @@ class CameraCalib:
         Mat, _ = cv2.Rodrigues(self.rvecs)
         tvec = self.tvecs * self.chess_size
 
-        rospy.sleep(2)
+        rospy.sleep(1)
+        rospy.loginfo(f"finish the extrinsic calibration !!!!")
         while not rospy.is_shutdown():
             obj = None
             img = np.copy(self.cv_image)
@@ -127,8 +169,15 @@ class CameraCalib:
                 xcenter = int((xmin + xmax)/2)
                 ycenter = int((ymin + ymax)/2)
                 point = np.array([[xcenter,ycenter,1]]).T
-                result = self.projection(point, self.mtx, Mat, tvec)
+                self.get_depth(point)
+                result = self.improved_projection(point, self.mtx, Mat, tvec)
+                # result = self.projection(point, self.mtx, Mat, tvec)
+                rospy.loginfo(f"depth is {self.depth*22.86}")
                 result = np.round(result, 2)
+                # rospy.loginfo(f"result is {result}")
+                # rospy.loginfo(f"the x value is {result[0]}")
+                # rospy.loginfo(f"the y value is {result[1]}")
+                # rospy.loginfo(f"the z value is {result[2]}")
             except:
                 result = []
                 point = []
